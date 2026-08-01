@@ -37,6 +37,7 @@ params = BarrierParams(
 path_counts = [10**n for n in range(2, 7)]
 n_steps = 64
 seed = 42
+rmse_repeats = 10
 brownian_bridge = True
 
 out_dir = ROOT / "results"
@@ -51,19 +52,30 @@ elif pricer.cuda is not None:
     print(f"Skipping CUDA series: {pricer.cuda_unavailable_reason}")
 
 results = {}
+rmse_results = {}
 for label, backend, rng in series:
     values = []
+    rmse_values = []
     for n_paths in path_counts:
-        result = pricer.monte_carlo(
-            params, n_paths=n_paths, n_steps=n_steps, rng=rng,
-            backend=backend, seed=seed, brownian_bridge=brownian_bridge,
-        )
-        values.append(result)
-        print(
-            f"{label:10s} paths={n_paths:8d} price={result.price:.8f} "
-            f"stderr={result.standard_error:.3e} time={result.elapsed_ms:.2f} ms"
-        )
+        repeated_prices = []
+        for repeat in range(rmse_repeats):
+            result = pricer.monte_carlo(
+                params, n_paths=n_paths, n_steps=n_steps, rng=rng,
+                backend=backend, seed=seed + repeat,
+                brownian_bridge=brownian_bridge,
+            )
+            repeated_prices.append(result.price)
+            if repeat == 0:
+                values.append(result)
+                print(
+                    f"{label:10s} paths={n_paths:8d} price={result.price:.8f} "
+                    f"stderr={result.standard_error:.3e} time={result.elapsed_ms:.2f} ms"
+                )
+        rmse = np.sqrt(np.mean(np.square(np.asarray(repeated_prices) - analytic)))
+        rmse_values.append(rmse)
+        print(f"{label:10s} paths={n_paths:8d} RMSE={rmse:.8e} ({rmse_repeats} repeats)")
     results[label] = values
+    rmse_results[label] = rmse_values
 print(f"Analytic   price={analytic:.8f}")
 
 markers = ["o", "s", "^", "D"]
@@ -88,13 +100,9 @@ fig.tight_layout()
 fig.savefig(out_dir / "price_convergence.png", dpi=180)
 
 fig, ax = plt.subplots(figsize=figsize)
-for index, (label, values) in enumerate(results.items()):
-    prices = np.array([v.price for v in values])
-    # One estimate is generated per path count, so this is the root squared
-    # error for that estimate. It is numerically equal to its absolute error.
-    rmse = np.sqrt(np.square(prices - analytic))
+for index, (label, rmse_values) in enumerate(rmse_results.items()):
     ax.plot(
-        path_counts, rmse, marker=markers[index],
+        path_counts, rmse_values, marker=markers[index],
         color=list_color[index], label=label,
     )
 ax.set_xscale("log", base=10)
