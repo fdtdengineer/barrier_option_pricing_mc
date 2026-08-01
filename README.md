@@ -6,7 +6,7 @@ A compact comparison project for a zero-rebate European **up-and-out call** unde
 - Native C++ Monte Carlo with OpenMP
 - CUDA Monte Carlo with cuRAND and GPU payoff/reduction
 - RNG switch: Mersenne Twister (`mt`) or randomized/scrambled Sobol (`sobol`)
-- Python `ctypes` calls and Matplotlib price, RMSE, and runtime plots
+- Python `ctypes` calls and Matplotlib price, normalized squared-error, and runtime plots
 - Brownian-bridge survival weighting for comparison with the continuous-barrier analytic solution
 
 ## Model
@@ -53,7 +53,7 @@ Dependencies:
 
 ## Run
 
-The parameters are intentionally written directly near the top of the script. The default path counts are `10^2, 10^3, 10^4, 10^5, 10^6`. RMSE is estimated from 10 seed-shifted pricing runs per path count by default.
+The parameters are intentionally written directly near the top of the script. The default path counts are `10^2, 10^3, 10^4, 10^5, 10^6`.
 
 ```bash
 python scripts/run_comparison.py
@@ -98,5 +98,5 @@ if pricer.cuda_available:
   engine is not bundled with the active toolchain.
 - CUDA Sobol uses cuRAND scrambled Sobol64, with one dimension per time step.
 - The reported Sobol standard error is the ordinary sample-variance estimate and is best read as a heuristic. For research-grade randomized-QMC error bars, repeat independent scrambles/seeds and estimate variance across replications.
-- The RMSE curve is the empirical root mean squared difference between repeated MC prices and the analytic price. Change `rmse_repeats` in `scripts/run_comparison.py` to adjust its replication count.
+- The error curve uses `(MC price - analytic price)^2 / analytic price^2` at each path count. Despite the retained output filename `rmse_convergence.png`, no square root or multi-seed averaging is applied.
 - The analytic formula assumes constant `r`, `q`, and `sigma`, continuous monitoring, European exercise, and zero rebate.
