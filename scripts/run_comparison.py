@@ -37,13 +37,14 @@ params = BarrierParams(
 path_counts = [10**n for n in range(2, 7)]
 n_steps = 64
 seed = 42
-rmse_repeats = 10
 brownian_bridge = True
 
 out_dir = ROOT / "results"
 out_dir.mkdir(exist_ok=True)
 pricer = BarrierPricer(ROOT / "build" / "lib")
 analytic = pricer.analytic(params)
+if analytic == 0.0:
+    raise ValueError("The normalized squared error is undefined when the analytic price is zero.")
 
 series = [("CPU MT", "cpu", "mt"), ("CPU Sobol", "cpu", "sobol")]
 if pricer.cuda_available:
@@ -52,30 +53,25 @@ elif pricer.cuda is not None:
     print(f"Skipping CUDA series: {pricer.cuda_unavailable_reason}")
 
 results = {}
-rmse_results = {}
+normalized_squared_errors = {}
 for label, backend, rng in series:
     values = []
-    rmse_values = []
+    errors = []
     for n_paths in path_counts:
-        repeated_prices = []
-        for repeat in range(rmse_repeats):
-            result = pricer.monte_carlo(
-                params, n_paths=n_paths, n_steps=n_steps, rng=rng,
-                backend=backend, seed=seed + repeat,
-                brownian_bridge=brownian_bridge,
-            )
-            repeated_prices.append(result.price)
-            if repeat == 0:
-                values.append(result)
-                print(
-                    f"{label:10s} paths={n_paths:8d} price={result.price:.8f} "
-                    f"stderr={result.standard_error:.3e} time={result.elapsed_ms:.2f} ms"
-                )
-        rmse = np.sqrt(np.mean(np.square(np.asarray(repeated_prices) - analytic)))
-        rmse_values.append(rmse)
-        print(f"{label:10s} paths={n_paths:8d} RMSE={rmse:.8e} ({rmse_repeats} repeats)")
+        result = pricer.monte_carlo(
+            params, n_paths=n_paths, n_steps=n_steps, rng=rng,
+            backend=backend, seed=seed, brownian_bridge=brownian_bridge,
+        )
+        values.append(result)
+        normalized_squared_error = ((result.price - analytic) ** 2) / (analytic ** 2)
+        errors.append(normalized_squared_error)
+        print(
+            f"{label:10s} paths={n_paths:8d} price={result.price:.8f} "
+            f"stderr={result.standard_error:.3e} time={result.elapsed_ms:.2f} ms "
+            f"normalized_squared_error={normalized_squared_error:.8e}"
+        )
     results[label] = values
-    rmse_results[label] = rmse_values
+    normalized_squared_errors[label] = errors
 print(f"Analytic   price={analytic:.8f}")
 
 markers = ["o", "s", "^", "D"]
@@ -100,15 +96,18 @@ fig.tight_layout()
 fig.savefig(out_dir / "price_convergence.png", dpi=180)
 
 fig, ax = plt.subplots(figsize=figsize)
-for index, (label, rmse_values) in enumerate(rmse_results.items()):
+for index, (label, errors) in enumerate(normalized_squared_errors.items()):
     ax.plot(
-        path_counts, rmse_values, marker=markers[index],
+        path_counts, errors, marker=markers[index],
         color=list_color[index], label=label,
     )
 ax.set_xscale("log", base=10)
 ax.set_yscale("log")
 ax.set_xlabel("Number of paths", fontsize=label_fs)
-ax.set_ylabel("RMSE vs analytic price", fontsize=label_fs)
+ax.set_ylabel(
+    r"$(P_{\mathrm{MC}}-P_{\mathrm{analytic}})^2/P_{\mathrm{analytic}}^2$",
+    fontsize=label_fs,
+)
 ax.tick_params(labelsize=label_fs)
 ax.grid(False)
 ax.legend(frameon=False, fontsize=label_fs)
