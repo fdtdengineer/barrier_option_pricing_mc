@@ -331,3 +331,44 @@ For the added large-path points, the observed CUDA-to-CPU runtime ratios were:
 
 The Sobol row is only a comparison of the plotted runtime series: CUDA uses
 scrambled Sobol64, whereas CPU `sobol` is still the MT-based fallback.
+
+### Why CUDA elapsed time still increases at 10^7 and 10^8 paths
+
+The increase is not evidence that CUDA throughput degrades at these path
+counts. It is primarily the expected result of increasing the total workload
+after the GPU has already reached useful occupancy.
+
+Each path is assigned to one CUDA thread, but its 64 time steps remain serial
+because every log-price update depends on the preceding step. Once there are
+enough paths to saturate the GPU, additional paths cannot make those dependent
+steps more parallel. They add another proportional amount of normal generation,
+path evolution, Brownian bridge arithmetic, and moment accumulation.
+
+The implementation also limits one batch to 262,144 paths. Consequently,
+10,000,000 paths require about 39 batches and 100,000,000 paths require about
+382 batches. Batching bounds peak memory usage, but each batch must still run
+its cuRAND generation and payoff kernel. The batches currently execute in
+sequence, so their total time accumulates approximately linearly.
+
+Normalizing the measurements by path confirms that large-path throughput is
+stable rather than declining:
+
+| RNG | Paths | Wall time | Time per path | Approx. throughput |
+|---|---:|---:|---:|---:|
+| CUDA MT | 10,000,000 | 58.50 ms | 5.85 ns | 171 million paths/s |
+| CUDA MT | 100,000,000 | 518.66 ms | 5.19 ns | 193 million paths/s |
+| CUDA Sobol | 10,000,000 | 30.92 ms | 3.09 ns | 323 million paths/s |
+| CUDA Sobol | 100,000,000 | 314.05 ms | 3.14 ns | 318 million paths/s |
+
+Thus, the tenfold path increase produces roughly a nine- to tenfold elapsed-time
+increase while useful throughput stays flat or improves slightly. At smaller
+path counts, fixed costs such as CUDA context/API work, generator setup,
+allocation, and cleanup are a larger fraction of wall time, so extrapolating
+from the small-path curve can make the large-path elapsed time look like a
+slowdown even though the GPU is simply operating in its steady-state regime.
+
+Possible further improvements would target steady-state throughput rather than
+occupancy: overlapping batch generation and payoff work with multiple streams,
+increasing the batch size when memory permits, or reducing the remaining
+per-step arithmetic. None of these changes the fundamental linear scaling in
+the total number of simulated path steps.
