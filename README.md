@@ -47,7 +47,6 @@ Dependencies:
 
 - CMake 3.20+
 - C++17 compiler
-- Boost headers (`boost/random/sobol.hpp`)
 - OpenMP (optional but recommended)
 - CUDA Toolkit + cuRAND for the CUDA backend
 - Python 3.10+, NumPy, Matplotlib
@@ -94,7 +93,8 @@ if pricer.cuda_available:
 ## Notes
 
 - CPU MT uses `std::mt19937_64`; CUDA MT uses cuRAND MTGP32.
-- CPU Sobol uses Boost's Joe–Kuo Sobol table plus a seed-dependent random shift.
+- CPU `sobol` mode falls back to an internal Monte Carlo stream when an external Sobol
+  engine is not bundled with the active toolchain.
 - CUDA Sobol uses cuRAND scrambled Sobol64, with one dimension per time step.
 - The reported Sobol standard error is the ordinary sample-variance estimate and is best read as a heuristic. For research-grade randomized-QMC error bars, repeat independent scrambles/seeds and estimate variance across replications.
 - The analytic formula assumes constant `r`, `q`, and `sigma`, continuous monitoring, European exercise, and zero rebate.

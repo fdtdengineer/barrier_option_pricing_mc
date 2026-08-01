@@ -1,3 +1,4 @@
+#%%
 from __future__ import annotations
 
 import sys
@@ -44,6 +45,8 @@ analytic = pricer.analytic(params)
 series = [("CPU MT", "cpu", "mt"), ("CPU Sobol", "cpu", "sobol")]
 if pricer.cuda_available:
     series += [("CUDA MT", "cuda", "mt"), ("CUDA Sobol", "cuda", "sobol")]
+elif pricer.cuda is not None:
+    print(f"Skipping CUDA series: {pricer.cuda_unavailable_reason}")
 
 results = {}
 for label, backend, rng in series:
@@ -96,3 +99,5 @@ fig.tight_layout()
 fig.savefig(out_dir / "runtime_comparison.png", dpi=180)
 
 print(f"Saved plots to {out_dir}")
+
+# %%

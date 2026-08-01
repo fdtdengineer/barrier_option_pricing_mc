@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 
 namespace {
@@ -78,6 +79,9 @@ __global__ void payoff_kernel(const double* uniforms, double* payoff, double* pa
 
 bool cuda_ok(cudaError_t status) { return status == cudaSuccess; }
 bool curand_ok(curandStatus_t status) { return status == CURAND_STATUS_SUCCESS; }
+void log_cuda_error(const char* where, cudaError_t status) {
+    std::fprintf(stderr, "%s: %s\n", where, cudaGetErrorString(status));
+}
 
 }  // namespace
 
@@ -96,7 +100,11 @@ extern "C" BARRIER_EXPORT int up_and_out_call_mc_cuda(
     }
 
     int device_count = 0;
-    if (!cuda_ok(cudaGetDeviceCount(&device_count)) || device_count == 0) return 2;
+    const cudaError_t device_status = cudaGetDeviceCount(&device_count);
+    if (!cuda_ok(device_status) || device_count == 0) {
+        if (!cuda_ok(device_status)) log_cuda_error("cudaGetDeviceCount failed", device_status);
+        return 2;
+    }
 
     curandGenerator_t generator = nullptr;
     const curandRngType_t generator_type = rng_type == 0
@@ -146,7 +154,15 @@ extern "C" BARRIER_EXPORT int up_and_out_call_mc_cuda(
         payoff_kernel<<<blocks, threads>>>(d_uniforms, d_payoff, d_payoff_sq,
             paths, n_steps, rng_type == 1, log_spot, strike, log_barrier,
             drift_step, vol_sqrt_step, variance_step, brownian_bridge != 0);
-        if (!cuda_ok(cudaGetLastError())) {
+        const cudaError_t launch_status = cudaGetLastError();
+        if (!cuda_ok(launch_status)) {
+            log_cuda_error("CUDA kernel launch failed", launch_status);
+            cudaFree(d_uniforms); cudaFree(d_payoff); cudaFree(d_payoff_sq);
+            curandDestroyGenerator(generator); return 6;
+        }
+        const cudaError_t sync_status = cudaDeviceSynchronize();
+        if (!cuda_ok(sync_status)) {
+            log_cuda_error("CUDA kernel execution failed", sync_status);
             cudaFree(d_uniforms); cudaFree(d_payoff); cudaFree(d_payoff_sq);
             curandDestroyGenerator(generator); return 6;
         }

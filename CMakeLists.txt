@@ -24,6 +24,10 @@ if(BUILD_CUDA)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
+        if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+            set(CMAKE_CUDA_ARCHITECTURES 75;80;86 CACHE STRING
+                "CUDA architectures to build for")
+        endif()
         find_package(CUDAToolkit REQUIRED)
         add_library(barrier_cuda SHARED src/barrier_cuda.cu)
         target_include_directories(barrier_cuda PRIVATE src)
@@ -32,9 +36,10 @@ if(BUILD_CUDA)
             OUTPUT_NAME barrier_cuda
             CUDA_STANDARD 17
             CUDA_STANDARD_REQUIRED ON
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-        message(STATUS "CUDA backend enabled")
+        message(STATUS "CUDA backend enabled for architectures: ${CMAKE_CUDA_ARCHITECTURES}")
     else()
         message(STATUS "CUDA compiler not found; building CPU backend only")
     endif()

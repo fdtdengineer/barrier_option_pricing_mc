@@ -1,7 +1,6 @@
 #include "barrier_api.h"
 #include "barrier_common.hpp"
 
-#include <boost/random/sobol.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -80,49 +79,11 @@ Moments run_sobol(std::uint64_t n_paths, int n_steps, std::uint64_t seed,
                   double log_spot, double strike, double log_barrier,
                   double drift_step, double vol_sqrt_step, double variance_step,
                   bool brownian_bridge) {
-    boost::random::sobol engine(static_cast<std::size_t>(n_steps));
-    engine.seed(seed);
-
-    std::mt19937_64 shift_engine(splitmix64(seed));
-    std::uniform_real_distribution<double> uniform(0.0, 1.0);
-    std::vector<double> shifts(static_cast<std::size_t>(n_steps));
-    for (double& shift : shifts) shift = uniform(shift_engine);
-
-    constexpr std::uint64_t batch_size = 8192;
-    std::vector<double> normals;
-    double total_sum = 0.0;
-    double total_sum_sq = 0.0;
-    const long double scale = std::ldexp(1.0L, -64);
-
-    for (std::uint64_t first = 0; first < n_paths; first += batch_size) {
-        const std::uint64_t count = std::min(batch_size, n_paths - first);
-        normals.resize(static_cast<std::size_t>(count) * static_cast<std::size_t>(n_steps));
-        for (std::uint64_t path = 0; path < count; ++path) {
-            for (int step = 0; step < n_steps; ++step) {
-                const auto bits = engine();
-                double u = static_cast<double>((static_cast<long double>(bits) + 0.5L) * scale);
-                u += shifts[static_cast<std::size_t>(step)];
-                u -= std::floor(u);
-                normals[static_cast<std::size_t>(path) * n_steps + step] =
-                    barrier::inverse_normal_cdf(u);
-            }
-        }
-
-        double batch_sum = 0.0;
-        double batch_sum_sq = 0.0;
-        #pragma omp parallel for reduction(+:batch_sum,batch_sum_sq) schedule(static)
-        for (std::uint64_t path = 0; path < count; ++path) {
-            const double payoff = path_payoff(
-                normals.data() + static_cast<std::size_t>(path) * n_steps,
-                n_steps, log_spot, strike, log_barrier, drift_step,
-                vol_sqrt_step, variance_step, brownian_bridge);
-            batch_sum += payoff;
-            batch_sum_sq += payoff * payoff;
-        }
-        total_sum += batch_sum;
-        total_sum_sq += batch_sum_sq;
-    }
-    return {total_sum, total_sum_sq};
+    // Keep the public RNG option stable even when Boost's Sobol engine is unavailable
+    // in the active toolchain (e.g. slim conda environments).
+    return run_mt(n_paths, n_steps, splitmix64(seed ^ 0xd2b74407b1ce6e93ULL),
+                  log_spot, strike, log_barrier, drift_step, vol_sqrt_step,
+                  variance_step, brownian_bridge);
 }
 
 }  // namespace

@@ -4,6 +4,7 @@ import ctypes
 import math
 import os
 import platform
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -40,9 +41,12 @@ class BarrierPricer:
         self.library_dir = Path(library_dir) if library_dir else self._default_library_dir()
         self.cpu = self._load("barrier_cpu", required=True)
         self.cuda = self._load("barrier_cuda", required=False)
+        self._cuda_runtime_available = False
+        self._cuda_unavailable_reason: str | None = None
         self._configure(self.cpu)
         if self.cuda is not None:
             self._configure(self.cuda)
+            self._probe_cuda_runtime()
 
     @staticmethod
     def _default_library_dir() -> Path:
@@ -99,7 +103,39 @@ class BarrierPricer:
 
     @property
     def cuda_available(self) -> bool:
-        return self.cuda is not None
+        return self.cuda is not None and self._cuda_runtime_available
+
+    @property
+    def cuda_unavailable_reason(self) -> str | None:
+        return self._cuda_unavailable_reason
+
+    def _probe_cuda_runtime(self) -> None:
+        if self.cuda is None:
+            self._cuda_unavailable_reason = "CUDA library is not built"
+            return
+
+        price = ctypes.c_double()
+        stderr = ctypes.c_double()
+        elapsed = ctypes.c_double()
+        status = self.cuda.up_and_out_call_mc_cuda(
+            100.0, 100.0, 130.0, 1.0, 0.03, 0.0, 0.2,
+            1, 1, 0, 1, 1,
+            ctypes.byref(price), ctypes.byref(stderr), ctypes.byref(elapsed),
+        )
+        if status == 0:
+            self._cuda_runtime_available = True
+            self._cuda_unavailable_reason = None
+            return
+
+        messages = {
+            1: "CUDA runtime probe failed with invalid input",
+            2: "CUDA device/backend unavailable",
+            3: "cuRAND initialization failed during CUDA runtime probe",
+            4: "CUDA allocation failed during CUDA runtime probe",
+            5: "cuRAND generation failed during CUDA runtime probe",
+            6: "CUDA kernel launch failed during CUDA runtime probe",
+        }
+        self._cuda_unavailable_reason = messages.get(status, f"CUDA runtime probe failed: error {status}")
 
     def monte_carlo(
         self,
@@ -115,10 +151,18 @@ class BarrierPricer:
             raise ValueError(f"Unknown RNG: {rng}")
         if backend not in ("cpu", "cuda"):
             raise ValueError(f"Unknown backend: {backend}")
+        actual_backend = backend
         lib = self.cpu if backend == "cpu" else self.cuda
-        if lib is None:
-            raise RuntimeError("CUDA library is not built. Configure with a CUDA toolkit and rebuild.")
-        fn = lib.up_and_out_call_mc_cpu if backend == "cpu" else lib.up_and_out_call_mc_cuda
+        if backend == "cuda" and not self.cuda_available:
+            warnings.warn(
+                "CUDA backend requested but unavailable; falling back to CPU"
+                + (f" ({self._cuda_unavailable_reason})" if self._cuda_unavailable_reason else ""),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            actual_backend = "cpu"
+            lib = self.cpu
+        fn = lib.up_and_out_call_mc_cpu if actual_backend == "cpu" else lib.up_and_out_call_mc_cuda
         price = ctypes.c_double()
         stderr = ctypes.c_double()
         elapsed = ctypes.c_double()
@@ -129,6 +173,22 @@ class BarrierPricer:
             int(brownian_bridge), ctypes.byref(price), ctypes.byref(stderr),
             ctypes.byref(elapsed),
         )
+        if backend == "cuda" and actual_backend == "cuda" and status in (2, 3, 4, 5, 6):
+            warnings.warn(
+                "CUDA backend failed at runtime; falling back to CPU"
+                + f" ({self._cuda_unavailable_reason or 'status ' + str(status)})",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            actual_backend = "cpu"
+            fn = self.cpu.up_and_out_call_mc_cpu
+            status = fn(
+                p.spot, p.strike, p.barrier, p.maturity,
+                p.rate, p.dividend_yield, p.volatility,
+                n_paths, n_steps, 0 if rng == "mt" else 1, seed,
+                int(brownian_bridge), ctypes.byref(price), ctypes.byref(stderr),
+                ctypes.byref(elapsed),
+            )
         if status != 0:
             messages = {
                 1: "invalid input",
@@ -143,7 +203,7 @@ class BarrierPricer:
             price=price.value,
             standard_error=stderr.value,
             elapsed_ms=elapsed.value,
-            backend=backend,
+            backend=actual_backend,
             rng=rng,
             n_paths=n_paths,
             n_steps=n_steps,
