@@ -6,7 +6,7 @@ A compact comparison project for a zero-rebate European **up-and-out call** unde
 - Native C++ Monte Carlo with OpenMP
 - CUDA Monte Carlo with cuRAND and GPU payoff/reduction
 - RNG switch: Mersenne Twister (`mt`) or randomized/scrambled Sobol (`sobol`)
-- Python `ctypes` calls and Matplotlib convergence/runtime plots
+- Python `ctypes` calls and Matplotlib price, RMSE, and runtime plots
 - Brownian-bridge survival weighting for comparison with the continuous-barrier analytic solution
 
 ## Model
@@ -53,7 +53,7 @@ Dependencies:
 
 ## Run
 
-The parameters are intentionally written directly near the top of the script.
+The parameters are intentionally written directly near the top of the script. The default path counts are `10^2, 10^3, 10^4, 10^5, 10^6`.
 
 ```bash
 python scripts/run_comparison.py
@@ -63,6 +63,7 @@ Outputs:
 
 ```text
 results/price_convergence.png
+results/rmse_convergence.png
 results/runtime_comparison.png
 ```
 
@@ -97,4 +98,5 @@ if pricer.cuda_available:
   engine is not bundled with the active toolchain.
 - CUDA Sobol uses cuRAND scrambled Sobol64, with one dimension per time step.
 - The reported Sobol standard error is the ordinary sample-variance estimate and is best read as a heuristic. For research-grade randomized-QMC error bars, repeat independent scrambles/seeds and estimate variance across replications.
+- The RMSE plot currently uses one estimate per path count, so each plotted value is the root squared error against the analytic price, numerically equal to the absolute pricing error.
 - The analytic formula assumes constant `r`, `q`, and `sigma`, continuous monitoring, European exercise, and zero rebate.
