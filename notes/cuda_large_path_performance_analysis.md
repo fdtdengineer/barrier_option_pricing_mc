@@ -182,14 +182,12 @@ primary explanation for the observed performance.
 
 ## Timing caveat
 
-The reported CUDA `elapsed_ms` begins after generator creation, generator
-configuration, and `cudaMalloc`, and stops before resource destruction. It is
-therefore GPU-work timing rather than complete API-call wall time. Including
-allocation and generator lifecycle overhead would make short CUDA runs appear
-somewhat slower. This caveat does not materially affect the large-path
-bottleneck, which is dominated by the payoff kernel.
-
-Relevant code: `src/barrier_cuda.cu`, around lines 109--137 and 174--186.
+During the initial diagnosis, CUDA `elapsed_ms` excluded generator creation,
+allocation, and cleanup, while CPU timing included its RNG and OpenMP setup.
+This was subsequently corrected: both backends now report `steady_clock` wall
+time covering backend initialization, simulation, result transfer, and resource
+cleanup after input validation. This makes the small- and large-path runtime
+plots directly comparable.
 
 ## Suggested optimization order
 
@@ -211,3 +209,125 @@ measurements, the most useful experiments are:
 The first four items target the measured dominant cost. Reduction and launch
 changes are worthwhile cleanup, but should not be expected to produce a large
 speedup on their own.
+
+## Implemented optimizations and results
+
+The recommendations above were implemented on 2026-08-01 without changing the
+GBM evolution, barrier conditions, Brownian bridge formula, discounting, or
+standard-error formula.
+
+Implemented changes:
+
+1. cuRAND now generates standard-normal floats directly, removing the custom
+   per-value inverse-normal calculation from the payoff kernel.
+2. Both MT and Sobol buffers are consumed in dimension-major order, giving
+   adjacent threads coalesced reads at each time step.
+3. Normal storage, path state, and Brownian bridge calculations use single
+   precision. Block-level payoff sums and squared-payoff sums remain double
+   precision.
+4. Brownian bridge survival uses `-expm1f(exponent)` instead of
+   `1-expf(exponent)` to avoid cancellation when an endpoint is very close to
+   the barrier.
+5. Each block reduces payoff and squared payoff together and atomically adds
+   two double-precision moments. The two payoff arrays, two Thrust reductions,
+   and per-batch device synchronization were removed.
+6. Odd MT output sizes are padded by one normal value to satisfy cuRAND's
+   Box--Muller output-length requirement; the padding value is ignored.
+7. Single-configuration CMake builds now default to `Release` when no build
+   type is supplied.
+8. CUDA timing now includes generator creation, allocation, result transfer,
+   and cleanup, matching the CPU wall-time scope.
+
+### Performance comparison
+
+The old Release library and optimized library were measured in the same test
+session using external wall-clock timing. The following values are medians of
+five runs at 1,000,000 paths and 64 steps on the RTX A2000:
+
+| RNG | Brownian bridge | Before | After | Speedup |
+|---|---:|---:|---:|---:|
+| MT | enabled | 113.31 ms | 8.80 ms | 12.9x |
+| Sobol | enabled | 120.17 ms | 9.44 ms | 12.7x |
+| MT | disabled | 85.01 ms | 9.09 ms | 9.4x |
+| Sobol | disabled | 93.25 ms | 8.82 ms | 10.6x |
+
+GPU timings at this scale fluctuate with clock state and system load, so these
+figures should be treated as representative rather than absolute. The speedup
+was large enough that the conclusion was not sensitive to that variation.
+
+### Pricing validation
+
+The optimized CUDA implementation was checked against the analytic continuous
+barrier price using 1,000,000 paths for both RNG modes. The validation covered:
+
+- the default parameters;
+- a near barrier at 105;
+- a far barrier at 180;
+- volatility 0.1 and 0.5;
+- 32, 64, and 128 time steps.
+
+All ten CUDA results were within six reported Monte Carlo standard errors of the
+analytic price. For the near-barrier case, whose analytic value was about
+0.0089483, the absolute differences were approximately `5.1e-5` for MT and
+`2.0e-4` for Sobol.
+
+Automated CUDA tests additionally cover both RNG modes and an odd
+`1001 paths * 33 steps` MT request. A discrete-monitoring CUDA result is also
+checked against the independent CPU estimate using their combined standard
+error. Tests skip cleanly on machines without an available CUDA runtime.
+
+## CPU-equivalent optimizations
+
+The CPU backend was optimized using the same principles where they apply
+without CUDA-specific mechanisms:
+
+1. Normal generation and path evolution are fused, removing the per-thread
+   normal vector and its extra write/read pass.
+2. Path state and Brownian bridge arithmetic use floats, including the stable
+   `-expm1f(exponent)` form. Final payoff moments remain double precision.
+3. CPU MT uses 32-bit `std::mt19937`, which is closer to CUDA MTGP32, and maps
+   its high 24 output bits directly through a float inverse-normal CDF.
+4. Every normal is still consumed after path knockout. RNG work remains fixed
+   at `paths * steps`, matching the CUDA pipeline.
+5. The OpenMP static path partition and double-precision reduction are retained.
+
+CPU `sobol` remains the documented MT-based fallback rather than a true Sobol
+engine; it benefits from the same optimized path and MT code. At 1,000,000
+paths and 64 steps, the CPU changes produced approximately 1.23x--1.39x speedup,
+depending on RNG label and Brownian bridge mode. Both CPU RNG modes were also
+validated against the analytic price across the same parameter cases as CUDA.
+
+## Extended 10^7 and 10^8 path run
+
+On 2026-08-01, `scripts/run_comparison.py` was extended from `10^2`--`10^6`
+paths to `10^2`--`10^8` paths in powers of ten. The price, normalized squared
+error, and runtime SVG plots were regenerated for all four series with 64 time
+steps and Brownian bridge enabled.
+
+The newly added measurements were:
+
+| Series | Paths | Price | Standard error | Wall time | Normalized squared error |
+|---|---:|---:|---:|---:|---:|
+| CPU MT | 10,000,000 | 3.20092082 | 1.854e-3 | 941.80 ms | 3.2607e-7 |
+| CPU MT | 100,000,000 | 3.20283390 | 5.864e-4 | 8,537.23 ms | 6.9157e-10 |
+| CPU Sobol fallback | 10,000,000 | 3.20656625 | 1.855e-3 | 1,173.79 ms | 1.4200e-6 |
+| CPU Sobol fallback | 100,000,000 | 3.20348751 | 5.865e-4 | 9,041.24 ms | 5.3073e-8 |
+| CUDA MT | 10,000,000 | 3.20210510 | 1.854e-3 | 58.50 ms | 4.0504e-8 |
+| CUDA MT | 100,000,000 | 3.20309965 | 5.864e-4 | 518.66 ms | 1.1940e-8 |
+| CUDA Sobol | 10,000,000 | 3.20285158 | 1.855e-3 | 30.92 ms | 1.0123e-9 |
+| CUDA Sobol | 100,000,000 | 3.20301074 | 5.863e-4 | 314.05 ms | 6.6444e-9 |
+
+The analytic price was `3.20274968`. At 100,000,000 paths, every estimate was
+within approximately 1.3 reported standard errors of the analytic value. The
+standard error decreased from about `5.86e-3` at 1,000,000 paths to `5.86e-4`
+at 100,000,000 paths, matching the expected inverse-square-root path scaling.
+
+For the added large-path points, the observed CUDA-to-CPU runtime ratios were:
+
+| RNG label | 10,000,000 paths | 100,000,000 paths |
+|---|---:|---:|
+| MT | 16.1x | 16.5x |
+| Sobol label | 38.0x | 28.8x |
+
+The Sobol row is only a comparison of the plotted runtime series: CUDA uses
+scrambled Sobol64, whereas CPU `sobol` is still the MT-based fallback.

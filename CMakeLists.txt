@@ -3,6 +3,10 @@ project(up_and_out_barrier_mc LANGUAGES CXX)
 
 option(BUILD_CUDA "Build the CUDA Monte Carlo backend when CUDA is available" ON)
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

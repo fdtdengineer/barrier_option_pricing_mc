@@ -53,7 +53,7 @@ Dependencies:
 
 ## Run
 
-The parameters are intentionally written directly near the top of the script. The default path counts are `10^2, 10^3, 10^4, 10^5, 10^6`.
+The parameters are intentionally written directly near the top of the script. The default path counts are `10^2` through `10^8` in powers of ten.
 
 ```bash
 python scripts/run_comparison.py
@@ -62,9 +62,9 @@ python scripts/run_comparison.py
 Outputs:
 
 ```text
-results/price_convergence.png
-results/rmse_convergence.png
-results/runtime_comparison.png
+results/price_convergence.svg
+results/rmse_convergence.svg
+results/runtime_comparison.svg
 ```
 
 Run the CPU test:
@@ -93,10 +93,13 @@ if pricer.cuda_available:
 
 ## Notes
 
-- CPU MT uses `std::mt19937_64`; CUDA MT uses cuRAND MTGP32.
+- CPU MT uses `std::mt19937` with a float inverse-CDF transform; CUDA MT uses
+  cuRAND MTGP32.
 - CPU `sobol` mode falls back to an internal Monte Carlo stream when an external Sobol
   engine is not bundled with the active toolchain.
 - CUDA Sobol uses cuRAND scrambled Sobol64, with one dimension per time step.
+- CPU and CUDA evolve paths in single precision and accumulate payoff moments in
+  double precision. CUDA generates its normal variates directly with cuRAND.
 - The reported Sobol standard error is the ordinary sample-variance estimate and is best read as a heuristic. For research-grade randomized-QMC error bars, repeat independent scrambles/seeds and estimate variance across replications.
-- The error curve uses `(MC price - analytic price)^2 / analytic price^2` at each path count. Despite the retained output filename `rmse_convergence.png`, no square root or multi-seed averaging is applied.
+- The error curve uses `(MC price - analytic price)^2 / analytic price^2` at each path count. Despite the retained output filename `rmse_convergence.svg`, no square root or multi-seed averaging is applied.
 - The analytic formula assumes constant `r`, `q`, and `sigma`, continuous monitoring, European exercise, and zero rebate.

@@ -34,7 +34,7 @@ params = BarrierParams(
     dividend_yield=0.00,
     volatility=0.20,
 )
-path_counts = [10**n for n in range(2, 7)]
+path_counts = [10**n for n in range(2, 9)]
 n_steps = 64
 seed = 42
 brownian_bridge = True
