@@ -189,6 +189,120 @@ is **not RMSE**. At each path count it is
 No square root or repeated-seed averaging is applied. The script rejects cases
 where the analytic price is zero because this normalized quantity is undefined.
 
+## Saved benchmark plots
+
+The [`saved/`](saved) directory contains a committed example run of the three
+plots. These figures were generated with the default contract parameters,
+64 time steps, Brownian bridge enabled, seed 42, and path counts from `10^2` to
+`10^8`. The analytic value for this run is `3.20274968`.
+
+The runtime measurements were obtained on the documented test system with an
+NVIDIA RTX A2000 12 GB GPU and an Intel Xeon W-2295 CPU. Runtime values should
+therefore be interpreted as a representative implementation comparison rather
+than portable hardware-independent benchmarks.
+
+### Price convergence
+
+<p align="center">
+  <a href="saved/price_convergence.svg">
+    <img src="saved/price_convergence.svg" alt="Monte Carlo price convergence toward the analytic up-and-out call price" width="520">
+  </a>
+</p>
+
+The horizontal line is the continuously monitored analytic price. Each Monte
+Carlo point shows the estimated option price and a `95%` confidence interval
+computed as `price +/- 1.96 * standard_error`.
+
+At small path counts, random sampling variation is large and the four series can
+lie visibly above or below the analytic value. The confidence intervals contract
+at approximately the usual `N^{-1/2}` Monte Carlo rate as the path count grows.
+By `10^8` paths, all four estimates are close to the analytic price:
+
+| Series | Price at `10^8` paths | Standard error |
+|---|---:|---:|
+| CPU MT | `3.20283390` | `5.864e-4` |
+| CPU Sobol fallback | `3.20348751` | `5.865e-4` |
+| CUDA MT | `3.20309965` | `5.864e-4` |
+| CUDA Sobol | `3.20301074` | `5.863e-4` |
+
+This agreement checks the consistency of the analytic implementation, the
+Brownian-bridge correction, and the CPU/CUDA pricing paths. It does not imply
+pathwise equality: each backend and RNG mode uses a different random stream.
+
+### Normalized squared pricing error
+
+<p align="center">
+  <a href="saved/rmse_convergence.svg">
+    <img src="saved/rmse_convergence.svg" alt="Normalized squared pricing error versus the number of Monte Carlo paths" width="520">
+  </a>
+</p>
+
+The vertical axis is
+
+```text
+(P_MC - P_analytic)^2 / P_analytic^2,
+```
+
+so lower values mean that the sampled price happens to be closer to the analytic
+price. Both axes are logarithmic.
+
+This is a single-seed, pointwise squared error rather than an empirical RMSE over
+independent replications. Consequently, the curves need not decrease
+monotonically: a smaller run can land unusually close to the analytic value by
+chance, while the next larger run can be farther away even though its estimator
+variance is lower. A proper convergence-rate study should repeat each path count
+with independent seeds or independent Sobol randomizations and average the
+squared errors before taking a square root.
+
+At `10^8` paths, the normalized squared errors in the saved run are:
+
+| Series | Normalized squared error |
+|---|---:|
+| CPU MT | `6.9157e-10` |
+| CPU Sobol fallback | `5.3073e-8` |
+| CUDA MT | `1.1940e-8` |
+| CUDA Sobol | `6.6444e-9` |
+
+The ordering in this one run should not be read as a general ranking of RNG
+quality. In particular, the CPU `sobol` label is an MT-based fallback and is not
+a true quasi-Monte Carlo result.
+
+### Runtime comparison
+
+<p align="center">
+  <a href="saved/runtime_comparison.svg">
+    <img src="saved/runtime_comparison.svg" alt="OpenMP CPU and CUDA Monte Carlo runtime comparison" width="520">
+  </a>
+</p>
+
+Both axes are logarithmic. The plotted time includes backend initialization,
+random-number generation, path simulation, result transfer, and cleanup. For
+small runs, fixed setup costs account for a substantial fraction of CUDA wall
+time. At larger path counts the GPU reaches a steady-throughput regime and the
+runtime grows approximately linearly with the total number of simulated path
+steps.
+
+Representative saved measurements are:
+
+| Series | `10^7` paths | `10^8` paths |
+|---|---:|---:|
+| CPU MT | `941.80 ms` | `8537.23 ms` |
+| CPU Sobol fallback | `1173.79 ms` | `9041.24 ms` |
+| CUDA MT | `58.50 ms` | `518.66 ms` |
+| CUDA Sobol | `30.92 ms` | `314.05 ms` |
+
+At `10^8` paths, CUDA MT is about `16.5x` faster than CPU MT in this run. The
+plotted CUDA Sobol series is about `28.8x` faster than the CPU series carrying
+the `sobol` label, but that ratio is not an apples-to-apples RNG benchmark
+because the CPU implementation uses its MT fallback while CUDA uses actual
+scrambled Sobol64.
+
+The near-constant time per path between `10^7` and `10^8` indicates that the
+larger elapsed time is caused by proportionally more work, not a loss of GPU
+occupancy. CUDA processes at most 262,144 paths per batch, so these large runs
+require many sequential batches. Further details are in
+[`notes/cuda_large_path_performance_analysis.md`](notes/cuda_large_path_performance_analysis.md).
+
 To inspect CUDA visibility and the wrapper's runtime probe:
 
 ```bash
