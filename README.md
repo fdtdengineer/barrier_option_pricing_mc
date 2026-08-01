@@ -53,7 +53,7 @@ Dependencies:
 
 ## Run
 
-The parameters are intentionally written directly near the top of the script. The default path counts are `10^2, 10^3, 10^4, 10^5, 10^6`.
+The parameters are intentionally written directly near the top of the script. The default path counts are `10^2, 10^3, 10^4, 10^5, 10^6`. RMSE is estimated from 10 seed-shifted pricing runs per path count by default.
 
 ```bash
 python scripts/run_comparison.py
@@ -98,5 +98,5 @@ if pricer.cuda_available:
   engine is not bundled with the active toolchain.
 - CUDA Sobol uses cuRAND scrambled Sobol64, with one dimension per time step.
 - The reported Sobol standard error is the ordinary sample-variance estimate and is best read as a heuristic. For research-grade randomized-QMC error bars, repeat independent scrambles/seeds and estimate variance across replications.
-- The RMSE plot currently uses one estimate per path count, so each plotted value is the root squared error against the analytic price, numerically equal to the absolute pricing error.
+- The RMSE curve is the empirical root mean squared difference between repeated MC prices and the analytic price. Change `rmse_repeats` in `scripts/run_comparison.py` to adjust its replication count.
 - The analytic formula assumes constant `r`, `q`, and `sigma`, continuous monitoring, European exercise, and zero rebate.
