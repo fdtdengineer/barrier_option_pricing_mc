@@ -1,13 +1,20 @@
-# Up-and-Out Barrier Option: analytic vs C++/CUDA Monte Carlo
+# Up-and-Out Barrier Option Pricing: Analytic, OpenMP, and CUDA
 
-A compact comparison project for a zero-rebate European **up-and-out call** under Black–Scholes/GBM.
+This repository compares a continuously monitored, zero-rebate European
+**up-and-out call** under Black–Scholes/GBM using:
 
-- Closed-form continuously monitored barrier price (C++, C ABI)
-- Native C++ Monte Carlo with OpenMP
-- CUDA Monte Carlo with cuRAND and GPU payoff/reduction
-- RNG switch: Mersenne Twister (`mt`) or randomized/scrambled Sobol (`sobol`)
-- Python `ctypes` calls and Matplotlib price, normalized squared-error, and runtime plots
-- Brownian-bridge survival weighting for comparison with the continuous-barrier analytic solution
+- a closed-form analytic price;
+- native C++ Monte Carlo parallelized with OpenMP;
+- CUDA Monte Carlo using cuRAND and a fused GPU payoff/moment reduction;
+- a Python `ctypes` interface and convergence/benchmark plotting script.
+
+Both Monte Carlo backends support Brownian-bridge survival weighting so that the
+simulation targets the same continuously monitored contract as the analytic
+formula. Discrete monitoring is also available.
+
+> **Important:** CUDA `rng="sobol"` uses cuRAND scrambled Sobol64. CPU
+> `rng="sobol"` is currently an MT-based fallback stream, not a true Sobol
+> implementation.
 
 ## Model
 
@@ -17,49 +24,154 @@ Under the risk-neutral measure,
 dS_t / S_t = (r - q) dt + sigma dW_t.
 ```
 
-The payoff is
+For spot `S0`, strike `K`, upper barrier `H`, maturity `T`, rate `r`, and
+continuous dividend yield `q`, the continuously monitored payoff is
 
 ```text
-exp(-rT) max(S_T-K, 0) 1{max_{0<=t<=T} S_t < H}.
+exp(-rT) max(S_T - K, 0) 1{max_{0<=t<=T} S_t < H}.
 ```
 
-The analytic implementation follows the standard `A-B+C-D` decomposition used for an up-and-out call with `K < H` and zero rebate. If `S0 >= H` or `K >= H`, its value is zero.
+The analytic implementation uses the standard `A - B + C - D` decomposition
+for an up-and-out call with `K < H` and zero rebate. The value is zero when
+`S0 >= H` or `K >= H`.
 
-For MC, `brownian_bridge=True` multiplies each path payoff by the conditional survival probability between adjacent log-price endpoints. This removes the main discrete-monitoring bias and makes the estimator target the same continuously monitored contract as the analytic formula. Set it to `False` to price a discretely monitored barrier instead.
+### Brownian-bridge correction
+
+With `x_i = log(S_i)`, `b = log(H)`, and `variance_step = sigma^2 dt`, the
+conditional survival factor between two endpoints below the barrier is
+
+```text
+1 - exp[-2 (b - x_i) (b - x_{i+1}) / variance_step].
+```
+
+When `brownian_bridge=True`, the path payoff is multiplied by these interval
+survival factors. This removes the main discrete-monitoring bias and makes the
+Monte Carlo estimator comparable with the continuously monitored analytic
+price.
+
+When `brownian_bridge=False`, only the simulated time-grid values are checked,
+so the result is a discretely monitored barrier price.
+
+## Implementation
+
+| Component | File | Main behavior |
+|---|---|---|
+| Analytic price and shared formulas | `src/barrier_common.hpp` | Double-precision closed form and validation |
+| CPU Monte Carlo | `src/barrier_cpu.cpp` | OpenMP path parallelism, `std::mt19937`, fused normal generation/path evolution |
+| CUDA Monte Carlo | `src/barrier_cuda.cu` | cuRAND normal generation, one thread per path, fused payoff and two-moment reduction |
+| C ABI | `src/barrier_api.h` | Shared-library entry points used by Python |
+| Python wrapper | `python/barrier_mc/pricing.py` | Library loading, CUDA runtime probe, validation, and CPU fallback |
+| Comparison script | `scripts/run_comparison.py` | Price, normalized squared-error, and runtime plots |
+
+### CPU backend
+
+- Uses a static OpenMP path partition.
+- Uses 32-bit `std::mt19937` and maps its high 24 bits through a float
+  inverse-normal approximation.
+- Fuses random-number generation and path evolution instead of storing a normal
+  vector per path.
+- Evolves log prices and Brownian-bridge weights in single precision.
+- Accumulates payoff and squared-payoff moments in double precision.
+- Consumes all `n_paths * n_steps` random values even after path knockout, which
+  keeps the work definition consistent with the CUDA pipeline.
+- Keeps `rng="sobol"` as a deterministic MT-based fallback with a separately
+  mixed seed.
+
+### CUDA backend
+
+- Uses cuRAND MTGP32 for `rng="mt"`.
+- Uses cuRAND scrambled Sobol64 for `rng="sobol"`, with one Sobol dimension per
+  time step; the Python `seed` is used as the cuRAND sequence offset.
+- Generates standard-normal floats directly with cuRAND.
+- Stores normals in dimension-major order, so neighboring threads read
+  neighboring values at each time step.
+- Evolves path state and Brownian-bridge arithmetic in single precision.
+- Uses the stable `-expm1f(exponent)` form for interval survival probabilities.
+- Reduces payoff and squared payoff together in double precision within each
+  block, then atomically accumulates the two global moments.
+- Processes at most `2^18 = 262,144` paths per batch to bound peak GPU memory.
+  Batches currently run sequentially.
+- Pads odd MT normal-output lengths by one value to satisfy cuRAND's generation
+  requirement; the padding value is ignored.
+
+The reported `elapsed_ms` for both CPU and CUDA covers backend initialization,
+simulation, result transfer, and cleanup after input validation.
+
+## Requirements
+
+- CMake 3.20+
+- A C++17 compiler
+- OpenMP, recommended for the CPU backend
+- Python 3.10+
+- NumPy, Matplotlib, and pytest
+- CUDA Toolkit and cuRAND for the CUDA backend
+
+The CUDA build defaults to architectures `75;80;86`. Override this when needed,
+for example:
+
+```bash
+cmake -S . -B build -DBUILD_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86
+```
 
 ## Build
 
-CPU only:
+A single-configuration build defaults to `Release` when no build type is given.
+
+### CPU only
 
 ```bash
 cmake -S . -B build -DBUILD_CUDA=OFF
 cmake --build build -j
 ```
 
-CPU + CUDA (automatically enabled when `nvcc` is visible):
+### CPU and CUDA
+
+CUDA is enabled when `BUILD_CUDA=ON` and CMake can find `nvcc`.
 
 ```bash
 cmake -S . -B build -DBUILD_CUDA=ON
 cmake --build build -j
 ```
 
-Dependencies:
+The shared libraries are written under `build/lib` for single-configuration
+generators:
 
-- CMake 3.20+
-- C++17 compiler
-- OpenMP (optional but recommended)
-- CUDA Toolkit + cuRAND for the CUDA backend
-- Python 3.10+, NumPy, Matplotlib
+```text
+barrier_cpu.dll / libbarrier_cpu.so / libbarrier_cpu.dylib
+barrier_cuda.dll / libbarrier_cuda.so / libbarrier_cuda.dylib
+```
 
-## Run
+For a multi-configuration generator such as Visual Studio, build the Release
+configuration explicitly and pass the actual library directory to
+`BarrierPricer` if the generator places binaries in a configuration subfolder:
 
-The parameters are intentionally written directly near the top of the script. The default path counts are `10^2` through `10^8` in powers of ten.
+```bash
+cmake --build build --config Release -j
+```
+
+## Run the comparison
+
+The experiment parameters are written directly near the top of
+`scripts/run_comparison.py`. The current defaults are:
+
+- `S0 = 100`, `K = 100`, `H = 130`;
+- `T = 1`, `r = 0.03`, `q = 0`, `sigma = 0.20`;
+- path counts `10^2, 10^3, ..., 10^8`;
+- 64 time steps;
+- seed 42;
+- Brownian bridge enabled.
+
+Run:
 
 ```bash
 python scripts/run_comparison.py
 ```
 
-Outputs:
+The script always evaluates CPU MT and CPU `sobol` fallback series. It adds CUDA
+MT and CUDA Sobol series only when the CUDA runtime probe succeeds.
+
+Each run prints the price, ordinary Monte Carlo standard error, elapsed time,
+and normalized squared pricing error. It creates:
 
 ```text
 results/price_convergence.svg
@@ -67,39 +179,144 @@ results/rmse_convergence.svg
 results/runtime_comparison.svg
 ```
 
-Run the CPU test:
+`rmse_convergence.svg` retains its historical filename, but the plotted quantity
+is **not RMSE**. At each path count it is
+
+```text
+(MC price - analytic price)^2 / analytic price^2.
+```
+
+No square root or repeated-seed averaging is applied. The script rejects cases
+where the analytic price is zero because this normalized quantity is undefined.
+
+To inspect CUDA visibility and the wrapper's runtime probe:
+
+```bash
+python scripts/check_cuda_env.py
+```
+
+The script also reports PyTorch CUDA information when PyTorch is installed;
+PyTorch is not otherwise required by this project.
+
+## Python API
+
+Add the repository's `python` directory to `PYTHONPATH`, or insert it into
+`sys.path`, then use `BarrierPricer`:
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("python").resolve()))
+
+from barrier_mc import BarrierParams, BarrierPricer
+
+params = BarrierParams(
+    spot=100.0,
+    strike=100.0,
+    barrier=130.0,
+    maturity=1.0,
+    rate=0.03,
+    dividend_yield=0.0,
+    volatility=0.2,
+)
+
+pricer = BarrierPricer("build/lib")
+analytic = pricer.analytic(params)
+
+cpu = pricer.monte_carlo(
+    params,
+    n_paths=262_144,
+    n_steps=64,
+    rng="mt",
+    backend="cpu",
+    seed=42,
+    brownian_bridge=True,
+)
+
+if pricer.cuda_available:
+    cuda = pricer.monte_carlo(
+        params,
+        n_paths=262_144,
+        n_steps=64,
+        rng="sobol",
+        backend="cuda",
+        seed=42,
+        brownian_bridge=True,
+    )
+```
+
+`MonteCarloResult` contains:
+
+```text
+price
+standard_error
+elapsed_ms
+backend
+rng
+n_paths
+n_steps
+brownian_bridge
+```
+
+The CPU library is required. The CUDA library is optional. When CUDA is
+requested but unavailable, the wrapper emits a `RuntimeWarning`, runs the CPU
+backend, and records the backend actually used in `result.backend`. Check
+`pricer.cuda_available` when a strict CUDA-only run is required.
+
+A custom default library directory can be supplied through
+`BARRIER_MC_LIB_DIR` when constructing `BarrierPricer()` without an explicit
+path.
+
+## Tests
+
+Run all tests:
+
+```bash
+python -m pytest tests -q
+```
+
+Run only the CPU tests:
 
 ```bash
 python -m pytest tests/test_cpu.py -q
 ```
 
-## Python API
+CUDA tests cover both RNG modes, Brownian-bridge pricing, an odd
+`n_paths * n_steps` MT request, and a discrete-monitoring comparison with CPU.
+They skip cleanly when the CUDA library or runtime is unavailable.
 
-```python
-from barrier_mc import BarrierParams, BarrierPricer
+## Numerical and statistical notes
 
-p = BarrierParams(spot=100, strike=100, barrier=130, maturity=1,
-                  rate=0.03, dividend_yield=0.0, volatility=0.2)
-pricer = BarrierPricer("build/lib")
+- The analytic formula assumes constant `r`, `q`, and `sigma`, European
+  exercise, continuous monitoring, and zero rebate.
+- Path evolution is single precision for throughput; the analytic calculation
+  and final payoff moments are double precision.
+- The reported standard error is derived from the ordinary within-run payoff
+  variance.
+- The CUDA Sobol standard error should be treated as a heuristic. For
+  research-grade randomized-QMC uncertainty estimates, run multiple independent
+  randomizations/offsets and estimate variance across replications.
+- CPU and CUDA RNG streams are not expected to produce pathwise-identical
+  results. Compare prices statistically rather than sample by sample.
 
-exact = pricer.analytic(p)
-cpu_mt = pricer.monte_carlo(p, 262144, 64, rng="mt", backend="cpu")
-cpu_sobol = pricer.monte_carlo(p, 262144, 64, rng="sobol", backend="cpu")
+## Performance
 
-if pricer.cuda_available:
-    gpu_mt = pricer.monte_carlo(p, 262144, 64, rng="mt", backend="cuda")
-    gpu_sobol = pricer.monte_carlo(p, 262144, 64, rng="sobol", backend="cuda")
-```
+The current implementation incorporates direct cuRAND normal generation,
+coalesced dimension-major reads, single-precision path arithmetic, stable
+Brownian-bridge evaluation, and a fused double-precision moment reduction.
 
-## Notes
+On the documented NVIDIA RTX A2000 test system, representative median wall times
+for 1,000,000 paths, 64 steps, and Brownian bridge enabled were approximately
+`8.80 ms` for CUDA MT and `9.44 ms` for CUDA Sobol after optimization. These
+numbers depend on GPU clock state, CUDA version, compiler, and system load and
+should not be treated as portable benchmarks.
 
-- CPU MT uses `std::mt19937` with a float inverse-CDF transform; CUDA MT uses
-  cuRAND MTGP32.
-- CPU `sobol` mode falls back to an internal Monte Carlo stream when an external Sobol
-  engine is not bundled with the active toolchain.
-- CUDA Sobol uses cuRAND scrambled Sobol64, with one dimension per time step.
-- CPU and CUDA evolve paths in single precision and accumulate payoff moments in
-  double precision. CUDA generates its normal variates directly with cuRAND.
-- The reported Sobol standard error is the ordinary sample-variance estimate and is best read as a heuristic. For research-grade randomized-QMC error bars, repeat independent scrambles/seeds and estimate variance across replications.
-- The error curve uses `(MC price - analytic price)^2 / analytic price^2` at each path count. Despite the retained output filename `rmse_convergence.svg`, no square root or multi-seed averaging is applied.
-- The analytic formula assumes constant `r`, `q`, and `sigma`, continuous monitoring, European exercise, and zero rebate.
+At large path counts, elapsed time grows approximately linearly because each
+thread still evolves its time steps serially and the fixed-size batches execute
+sequentially. Stable time-per-path at `10^7` and `10^8` paths indicates steady
+throughput rather than loss of GPU occupancy.
+
+See [`notes/cuda_large_path_performance_analysis.md`](notes/cuda_large_path_performance_analysis.md)
+for the original bottleneck investigation, implemented optimizations, validation
+results, and extended large-path measurements.
