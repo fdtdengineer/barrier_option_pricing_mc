@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT / "python"))
 from barrier_mc import BarrierParams, BarrierPricer  # noqa: E402
 
 fs = 18
+label_fs = fs * 0.7
+figsize = (4, 3.6)
 plt.rcParams.update({
     'font.family': 'Liberation Sans',
     'font.sans-serif': ['Liberation Sans'],
@@ -32,7 +34,7 @@ params = BarrierParams(
     dividend_yield=0.00,
     volatility=0.20,
 )
-path_counts = [2**12, 2**14, 2**16, 2**18]
+path_counts = [10**n for n in range(2, 7)]
 n_steps = 64
 seed = 42
 brownian_bridge = True
@@ -64,9 +66,10 @@ for label, backend, rng in series:
     results[label] = values
 print(f"Analytic   price={analytic:.8f}")
 
-fig, ax = plt.subplots(figsize=(10, 7))
-ax.axhline(analytic, color=list_color[0], linewidth=2.0, label="Analytic")
 markers = ["o", "s", "^", "D"]
+
+fig, ax = plt.subplots(figsize=figsize)
+ax.axhline(analytic, color=list_color[0], linewidth=2.0, label="Analytic")
 for index, (label, values) in enumerate(results.items()):
     x = np.array(path_counts)
     y = np.array([v.price for v in values])
@@ -75,26 +78,48 @@ for index, (label, values) in enumerate(results.items()):
         x, y, yerr=err, marker=markers[index], capsize=4,
         color=list_color[index], label=f"{label} (95% MC CI)",
     )
-ax.set_xscale("log", base=2)
-ax.set_xlabel("Number of paths")
-ax.set_ylabel("Up-and-out call price")
-ax.grid(alpha=0.25)
-ax.legend(frameon=False)
+ax.set_xscale("log", base=10)
+ax.set_xlabel("Number of paths", fontsize=label_fs)
+ax.set_ylabel("Up-and-out call price", fontsize=label_fs)
+ax.tick_params(labelsize=label_fs)
+ax.grid(False)
+ax.legend(frameon=False, fontsize=label_fs)
 fig.tight_layout()
 fig.savefig(out_dir / "price_convergence.png", dpi=180)
 
-fig, ax = plt.subplots(figsize=(10, 7))
+fig, ax = plt.subplots(figsize=figsize)
+for index, (label, values) in enumerate(results.items()):
+    prices = np.array([v.price for v in values])
+    # One estimate is generated per path count, so this is the root squared
+    # error for that estimate. It is numerically equal to its absolute error.
+    rmse = np.sqrt(np.square(prices - analytic))
+    ax.plot(
+        path_counts, rmse, marker=markers[index],
+        color=list_color[index], label=label,
+    )
+ax.set_xscale("log", base=10)
+ax.set_yscale("log")
+ax.set_xlabel("Number of paths", fontsize=label_fs)
+ax.set_ylabel("RMSE vs analytic price", fontsize=label_fs)
+ax.tick_params(labelsize=label_fs)
+ax.grid(False)
+ax.legend(frameon=False, fontsize=label_fs)
+fig.tight_layout()
+fig.savefig(out_dir / "rmse_convergence.png", dpi=180)
+
+fig, ax = plt.subplots(figsize=figsize)
 for index, (label, values) in enumerate(results.items()):
     ax.plot(
         path_counts, [v.elapsed_ms for v in values], marker=markers[index],
         color=list_color[index], label=label,
     )
-ax.set_xscale("log", base=2)
+ax.set_xscale("log", base=10)
 ax.set_yscale("log")
-ax.set_xlabel("Number of paths")
-ax.set_ylabel("Elapsed time [ms]")
-ax.grid(alpha=0.25)
-ax.legend(frameon=False)
+ax.set_xlabel("Number of paths", fontsize=label_fs)
+ax.set_ylabel("Elapsed time [ms]", fontsize=label_fs)
+ax.tick_params(labelsize=label_fs)
+ax.grid(False)
+ax.legend(frameon=False, fontsize=label_fs)
 fig.tight_layout()
 fig.savefig(out_dir / "runtime_comparison.png", dpi=180)
 
