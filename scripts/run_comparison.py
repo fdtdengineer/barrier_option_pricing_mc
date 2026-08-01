@@ -93,7 +93,7 @@ ax.tick_params(labelsize=label_fs)
 ax.grid(False)
 ax.legend(frameon=False, fontsize=label_fs)
 fig.tight_layout()
-fig.savefig(out_dir / "price_convergence.png", dpi=180)
+fig.savefig(out_dir / "price_convergence.svg", dpi=180)
 
 fig, ax = plt.subplots(figsize=figsize)
 for index, (label, errors) in enumerate(normalized_squared_errors.items()):
@@ -112,7 +112,7 @@ ax.tick_params(labelsize=label_fs)
 ax.grid(False)
 ax.legend(frameon=False, fontsize=label_fs)
 fig.tight_layout()
-fig.savefig(out_dir / "rmse_convergence.png", dpi=180)
+fig.savefig(out_dir / "rmse_convergence.svg", dpi=180)
 
 fig, ax = plt.subplots(figsize=figsize)
 for index, (label, values) in enumerate(results.items()):
@@ -128,7 +128,7 @@ ax.tick_params(labelsize=label_fs)
 ax.grid(False)
 ax.legend(frameon=False, fontsize=label_fs)
 fig.tight_layout()
-fig.savefig(out_dir / "runtime_comparison.png", dpi=180)
+fig.savefig(out_dir / "runtime_comparison.svg", dpi=180)
 
 print(f"Saved plots to {out_dir}")
 
