@@ -35,6 +35,10 @@ The analytic implementation uses the standard `A - B + C - D` decomposition
 for an up-and-out call with `K < H` and zero rebate. The value is zero when
 `S0 >= H` or `K >= H`.
 
+A detailed derivation from the absorbing log-price transition density, together
+with a line-by-line mapping to the C++ formula, is provided in
+[`notes/model_and_analytic_solution.md`](notes/model_and_analytic_solution.md).
+
 ### Brownian-bridge correction
 
 With `x_i = log(S_i)`, `b = log(H)`, and `variance_step = sigma^2 dt`, the
